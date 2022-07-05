@@ -1,0 +1,272 @@
+---
+title: "SSeroincidence of Enteric Fever in Juba, South Sudan"
+output:   
+  html_document:
+    highlight: haddock
+    theme: default
+    #code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+date: '`r paste("Updated on", Sys.Date())`'
+author: "Kristen Aiemjoy, UC Davis"
+---
+
+
+## Script preamble
+```{r preamble, message=FALSE, warning=FALSE}
+
+#Load packages
+library(Hmisc)
+library(tidyverse)
+library(kableExtra)
+
+
+# Load serocalculator package (still in development, use devtools for now)
+# library(devtools)
+# install_github("UCD-SEG/serocalculator")
+library(serocalculator)
+
+
+# set up for parallel computing
+library(doParallel)
+registerDoParallel(cores=8)
+```
+
+
+
+
+## Load data
+```{r data format, message=FALSE, warning=FALSE}
+
+## Longitudinal parameters from blood culture positive enteric fever cases" 
+dmcmc <- read_csv("data/dmcmc.csv")
+
+
+## South Sudan population serosurvey data (HlyE IgG and IgA responses)
+dS <- read_csv("data/dpop.csv") %>%
+  mutate(ageCat2= factor(ageCat2))
+
+
+## Conditional parameters:
+# llod = lower limit of detection
+# nu = biologic noise
+# y.high = upper limit of detection
+# eps = measurement error
+cond <- read_csv("data/cond.csv")
+
+cond.hlye.IgG <- cond %>% filter(antigen_iso == "HlyE_IgG")  %>% select(-antigen_iso)
+
+cond.hlye.IgA <- cond %>% filter(antigen_iso == "HlyE_IgA")  %>% select(-antigen_iso)
+
+```
+
+
+
+
+## Seroincidence helper functions
+```{r message=FALSE, warning=FALSE}
+
+## AGE-SPECIFIC SEROINCIDENCE
+incidence.age <- function(p, c.age, start){
+
+lambda = start # initial estimate: starting value
+log.lambda = log(lambda)
+log.lmin=log(lambda/10)
+log.lmax=log(10*lambda)   # seroincidence rate interval
+
+c <- deparse(substitute(c))
+cat <- deparse(substitute(cat))
+
+   #Cross-sectional population data
+  p.hlye.IgA <- p %>% 
+    filter(ageCat == c.age) %>%
+    select(Age, HlyE_IgA) %>%
+    rename(y=HlyE_IgA,
+           a=Age) %>%
+    drop_na()
+
+
+  p.hlye.IgG <- p %>% 
+    filter(ageCat == c.age) %>%
+    select(Age, HlyE_IgG) %>%
+    rename(y=HlyE_IgG,
+           a=Age) %>%
+    drop_na()
+  
+
+  #case data 
+    c.hlye.IgA <- dmcmc %>% filter(antigen_iso == "HlyE_IgA") %>%
+     filter(ageCat == c.age) %>% 
+     mutate(alpha = alpha*365.25, 
+            d = r-1) %>%
+     select(y1, alpha, d)
+   
+   c.hlye.IgG <- dmcmc %>% filter(antigen_iso == "HlyE_IgG") %>%
+     filter(ageCat == c.age) %>% 
+     mutate(alpha = alpha*365.25, 
+            d = r-1) %>%
+     select(y1, alpha, d)
+
+
+  
+  objfunc <- function(llam){
+    # add terms, e.g. for other antibodies
+     res <-
+        fdev(llam, p.hlye.IgG, c.hlye.IgG, cond.hlye.IgG) +
+        fdev(llam, p.hlye.IgA, c.hlye.IgA, cond.hlye.IgA) 
+
+}
+       
+  # seroincidence estimation
+  fit = nlm(objfunc,log.lambda,
+            hessian=TRUE,print.level=0,stepmax=(log.lmax-log.lmin)/4)
+
+  log.lambda.est = c(start,
+                     c.age,
+                             exp(fit$estimate),
+                             exp(fit$estimate + qnorm(c(0.25))*sqrt(1/fit$hessian)),
+                             exp(fit$estimate + qnorm(c(0.975))*sqrt(1/fit$hessian)),
+                             fit$minimum,
+                             fit$iterations)
+    return(log.lambda.est)
+}
+
+
+#OVERALL SEROINCIDENCE
+incidence <- function(p,  start){
+
+lambda = start # initial estimate: starting value
+log.lambda = log(lambda)
+log.lmin=log(lambda/10)
+log.lmax=log(10*lambda)   # seroincidence rate interval
+
+c <- deparse(substitute(c))
+cat <- deparse(substitute(cat))
+
+   #Cross-sectional population data
+  p.hlye.IgA <- p %>% 
+    select(Age, HlyE_IgA) %>%
+    rename(y=HlyE_IgA,
+           a=Age) %>%
+    drop_na()
+
+
+  p.hlye.IgG <- p %>% 
+    select(Age, HlyE_IgG) %>%
+    rename(y=HlyE_IgG,
+           a=Age) %>%
+    drop_na()
+  
+
+  #case data
+    c.hlye.IgA <- dmcmc %>% filter(antigen_iso == "HlyE_IgA") %>%
+     filter(ageCat == "Overall") %>% 
+     mutate(alpha = alpha*365.25, 
+            d = r-1) %>%
+     select(y1, alpha, d)
+   
+   c.hlye.IgG <- dmcmc %>% filter(antigen_iso == "HlyE_IgG") %>%
+     filter(ageCat == "Overall") %>% 
+     mutate(alpha = alpha*365.25, 
+            d = r-1) %>%
+     select(y1, alpha, d)
+
+   
+  
+  objfunc <- function(llam){
+    # add terms, e.g. for other antibodies
+     res <-
+        fdev(llam, p.hlye.IgG, c.hlye.IgG, cond.hlye.IgG) +
+       fdev(llam, p.hlye.IgA, c.hlye.IgA, cond.hlye.IgA) 
+
+}
+       
+  # seroincidence estimation
+  fit = nlm(objfunc,log.lambda,
+            hessian=TRUE,print.level=0,stepmax=(log.lmax-log.lmin)/4)
+
+  log.lambda.est = c(start,
+                             exp(fit$estimate),
+                             exp(fit$estimate + qnorm(c(0.025))*sqrt(1/fit$hessian)),
+                             exp(fit$estimate + qnorm(c(0.975))*sqrt(1/fit$hessian)),
+                             fit$minimum,
+                             fit$iterations)
+    return(log.lambda.est)
+}
+
+```
+
+
+
+
+
+
+## Age-specific and overall seroincidence
+```{r message=FALSE, warning=FALSE, cache = T}
+
+## AGE - SPECIFIC
+agelevels2 <- levels(dS$ageCat2)
+
+SSudan.ageCat2 <- 
+  foreach(i =levels(dS$ageCat2), .combine=rbind) %dopar% {
+     dS.a <- dS %>% filter(ageCat2 == i) %>% droplevels()
+     a2 <- as.character(dS.a$ageCat)[1]
+     inc.temp <- incidence.age(dS.a,  a2,  .2)
+    res <- t(inc.temp) %>% as.data.frame() %>% mutate(ageCat2 = i)
+  }
+
+
+names(SSudan.ageCat2) <- c("startingval", "ageCat", "lambda", "lwr0.025", "upr0.975",
+                                        "LLF","N iter.", "ageCat2")
+
+SSudan.ageCat2 <- SSudan.ageCat2 %>% select(-ageCat)
+
+
+## OVERALL
+s.sudan.all <- incidence(dS,  .2)
+
+SSudan.all2 <- as.data.frame(t(s.sudan.all)) 
+
+
+names(SSudan.all2) <- c("startingval", "lambda", "lwr0.025", "upr0.975",
+                                        "LLF","N iter.")
+
+
+## COMBINE
+SSudan.comb <- SSudan.all2 %>% mutate(ageCat2 ="Overall") %>% 
+  rbind(SSudan.ageCat2) %>%
+  mutate(Country = "South Sudan: Juba") %>%
+  select(Country, ageCat2, lambda, 
+         lwr0.025, upr0.975) %>%
+  mutate(lambda = as.numeric(lambda),
+         lwr0.025 = as.numeric(lwr0.025),
+         upr0.975 = as.numeric(upr0.975)) %>%
+  mutate(SeroIncidence = paste(sprintf("%.1f", lambda*100), " (", sprintf("%.1f", lwr0.025*100), "-", sprintf("%.1f", upr0.975*100), ")", sep="")) %>%
+  select(ageCat2, SeroIncidence) %>%
+  mutate(ageCat2 = factor(ageCat2, levels = c("1-3", "4-6", "7-9", "10-14", "15-24", "25-34","35-44", "45+", "Overall"))) %>%
+  arrange(ageCat2)
+
+kable(SSudan.comb, col.names = c("Age, in years", "Seroincidence per 100 person-years (95% CI)")) %>%
+  kable_styling(full_width = T) 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
